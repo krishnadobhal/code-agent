@@ -3,7 +3,7 @@
 A small Claude Code-style coding agent for the terminal. Chat with a model that can read, search and
 edit files and run shell commands in the current folder, asking you before anything risky.
 
-Built with TypeScript on [Bun](https://bun.sh).
+Built with TypeScript on [Bun](https://bun.sh), with a React + [Ink](https://github.com/vadimdemedes/ink) terminal UI.
 
 ## Quick start
 
@@ -12,7 +12,7 @@ bun install
 bun start            # needs ANTHROPIC_API_KEY
 ```
 
-Type a request at the `>` prompt. Replies stream as they are written; Ctrl+C cancels the
+Type a request at the `>` prompt (`/help` lists commands: `/clear`, `/model` to list and pick a model, `/effort low|medium|high|xhigh|max`, `/exit`). Replies stream as they are written; Ctrl+C cancels the
 current reply (twice, or at an empty prompt, quits); `exit` quits.
 
 Project instructions: put them in `AGENT.md`, `AGENTS.md` or `CLAUDE.md`. Files in the current folder

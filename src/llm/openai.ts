@@ -33,7 +33,7 @@ export class OpenAIProvider implements Provider {
     system: string,
     messages: Message[],
     tools: ToolSchema[],
-    { onText, signal }: CompleteOptions = {},
+    { onText, signal, effort }: CompleteOptions = {},
   ): Promise<Reply> {
     // The SDK requires a key; local servers (Ollama, LM Studio) ignore it.
     this.client ??= new OpenAI({ apiKey: this.apiKey ?? "not-needed", baseURL: this.baseUrl });
@@ -48,13 +48,14 @@ export class OpenAIProvider implements Provider {
             type: "function",
             function: { name: t.name, description: t.description, parameters: t.input_schema },
           })),
+          ...(effort ? { reasoning_effort: effort } : {}),
         },
         { signal },
       );
       if (onText) stream.on("content", (delta) => onText(delta));
       completion = await stream.finalChatCompletion();
     } catch (error) {
-      if (error instanceof OpenAI.APIError) {
+      if (error instanceof OpenAI.OpenAIError) {
         throw new ProviderError(`${this.baseUrl}: ${error.message}`, { cause: error });
       }
       throw error;
@@ -73,6 +74,18 @@ export class OpenAIProvider implements Provider {
     else if (choice.finish_reason === "length") stop = "max_tokens";
 
     return { text: msg.content ?? msg.refusal ?? "", toolCalls, stop };
+  }
+
+  async listModels(): Promise<string[]> {
+    this.client ??= new OpenAI({ apiKey: this.apiKey ?? "not-needed", baseURL: this.baseUrl });
+    const ids: string[] = [];
+    try {
+      for await (const m of this.client.models.list()) ids.push(m.id);
+    } catch (error) {
+      if (error instanceof OpenAI.OpenAIError) throw new ProviderError(`${this.baseUrl}: ${error.message}`, { cause: error });
+      throw error;
+    }
+    return ids.sort();
   }
 }
 

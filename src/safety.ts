@@ -39,6 +39,17 @@ export async function allowed(name: string, args: Record<string, unknown>, judge
     }
   }
 
-  console.log(`\n[permission] ${name} ${JSON.stringify(args).slice(0, 1000)}`);
+  return ask(`${name} ${JSON.stringify(args).slice(0, 1000)}`);
+}
+
+/** Asks the user to approve one tool call; the Ink UI swaps in its own with setAsk. */
+export type Ask = (request: string) => Promise<boolean>;
+
+let ask: Ask = async (request) => {
+  console.log(`\n[permission] ${request}`);
   return prompt("Allow? [y/N]")?.trim().toLowerCase() === "y";
+};
+
+export function setAsk(fn: Ask): void {
+  ask = fn;
 }

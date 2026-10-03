@@ -27,10 +27,16 @@ export interface Provider {
   readonly name: string;
   readonly model: string;
   complete(system: string, messages: Message[], tools: ToolSchema[], opts?: CompleteOptions): Promise<Reply>;
+  /** Model ids this backend's key or server can use. */
+  listModels(): Promise<string[]>;
 }
 
-/** `onText` gets reply text as it streams; `signal` cancels the request. */
-export type CompleteOptions = { onText?: (delta: string) => void; signal?: AbortSignal };
+/** Levels both Anthropic and OpenAI accept. */
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
+
+/** `onText` gets streamed text; `signal` cancels; `effort` is sent only when set (old models reject it). */
+export type CompleteOptions = { onText?: (delta: string) => void; signal?: AbortSignal; effort?: Effort };
 
 /** Thrown for API/network failures; the REPL rolls back the turn on it. */
 export class ProviderError extends Error {}

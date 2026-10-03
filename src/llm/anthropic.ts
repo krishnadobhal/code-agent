@@ -25,7 +25,7 @@ export class AnthropicProvider implements Provider {
     system: string,
     messages: Message[],
     tools: ToolSchema[],
-    { onText, signal }: CompleteOptions = {},
+    { onText, signal, effort }: CompleteOptions = {},
   ): Promise<Reply> {
     this.client ??= new Anthropic(); // reads ANTHROPIC_API_KEY or an `ant auth login` profile
     try {
@@ -38,6 +38,7 @@ export class AnthropicProvider implements Provider {
           messages: messages.map(toParam),
           tools,
           thinking: { type: "adaptive" },
+          ...(effort ? { output_config: { effort } } : {}),
           // On a safety-classifier refusal, the server retries on Anthropic's recommended model.
           betas: ["server-side-fallback-2026-07-01"],
           fallbacks: "default",
@@ -47,11 +48,23 @@ export class AnthropicProvider implements Provider {
       if (onText) stream.on("text", (delta) => onText(delta));
       return toReply(await stream.finalMessage());
     } catch (error) {
-      if (error instanceof Anthropic.APIError) {
+      if (error instanceof Anthropic.AnthropicError) {
         throw new ProviderError(error.message, { cause: error });
       }
       throw error;
     }
+  }
+
+  async listModels(): Promise<string[]> {
+    this.client ??= new Anthropic();
+    const ids: string[] = [];
+    try {
+      for await (const m of this.client.models.list()) ids.push(m.id); // auto-paginates
+    } catch (error) {
+      if (error instanceof Anthropic.AnthropicError) throw new ProviderError(error.message, { cause: error });
+      throw error;
+    }
+    return ids;
   }
 }
 

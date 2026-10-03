@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execute, runTurn, systemPrompt } from "../src/agent.ts";
+import { handleCommand, type Session } from "../src/commands.ts";
 import { createProvider, type Message, type Provider, ProviderError, type Reply } from "../src/llm/index.ts";
 import { OpenAIProvider } from "../src/llm/openai.ts";
 import * as jev from "../src/jev.ts";
@@ -26,7 +27,7 @@ afterEach(() => {
 });
 
 function fakeProvider(replies: Reply[]): Provider {
-  return { name: "fake", model: "fake", complete: async () => replies.shift()! };
+  return { name: "fake", model: "fake", complete: async () => replies.shift()!, listModels: async () => ["a", "b"] };
 }
 
 test("loop runs a tool, then returns the answer", async () => {
@@ -129,10 +130,11 @@ test("openai provider streams text and maps history and tool calls both ways", a
       { role: "tool", results: [{ toolCallId: "c1", content: "boom", isError: true }] },
     ],
     [],
-    { onText: (d) => streamed.push(d) },
+    { onText: (d) => streamed.push(d), effort: "low" },
   );
 
   expect(streamed).toEqual(["Let me ", "look"]);
+  expect(sent.reasoning_effort).toBe("low");
   expect(reply).toEqual({
     text: "Let me look",
     stop: "tool_use",
@@ -213,6 +215,7 @@ test("an aborted turn stops before the next model call", async () => {
   let calls = 0;
   const provider: Provider = {
     name: "fake",
+    listModels: async () => [],
     model: "fake",
     complete: async () => {
       calls++;
@@ -242,4 +245,31 @@ test("memory keeps only the first 100 lines of each file", () => {
   const memory = loadMemory(tmp);
   expect(memory).toContain("line 100\n[50 more lines");
   expect(memory).not.toContain("line 101");
+});
+
+test("slash commands: help, clear, model list/switch, effort, exit, unknown", async () => {
+  const session: Session = { messages: [{ role: "user", text: "hi" }], provider: fakeProvider([]) };
+  expect(await handleCommand("hello", session)).toBeUndefined();
+  expect((await handleCommand("/help", session))!.text).toContain("/effort");
+  expect((await handleCommand("/clear", session))!.text).toContain("cleared");
+  expect(session.messages).toHaveLength(0);
+
+  const list = (await handleCommand("/model", session))!.text;
+  expect(list).toContain(" 1. a");
+  expect(list).toContain(" 2. b");
+  expect((await handleCommand("/model 9", session))!.text).toContain("No model #9");
+  await handleCommand("/model 2", session);
+  expect(session.provider.model).toBe("b");
+  await handleCommand("/model claude-sonnet-5", session);
+  expect(session.provider.model).toBe("claude-sonnet-5");
+
+  expect((await handleCommand("/effort", session))!.text).toContain("default");
+  await handleCommand("/effort high", session);
+  expect(session.effort).toBe("high");
+  expect((await handleCommand("/effort turbo", session))!.text).toContain("Unknown effort");
+  await handleCommand("/effort default", session);
+  expect(session.effort).toBeUndefined();
+
+  expect((await handleCommand("/exit", session))!.exit).toBe(true);
+  expect((await handleCommand("/nope", session))!.text).toContain("Unknown command");
 });

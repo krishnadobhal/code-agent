@@ -7,6 +7,9 @@ import * as tools from "./tools/index.ts";
 
 const PREVIEW_CHARS = 120; // how much of a tool's input to echo to the terminal
 
+/** Model options plus `onTool`, which receives a line for each tool call as it starts. */
+export type TurnOptions = CompleteOptions & { onTool?: (line: string) => void };
+
 /** Base instructions plus the project's memory files, re-read each turn. */
 export function systemPrompt(): string {
   // stable part first, memory last: keeps the prompt prefix cacheable
@@ -28,11 +31,7 @@ How to work:
 }
 
 /** Run one user turn to the final answer; appends to `messages` in place (tests pass a fake provider). */
-export async function runTurn(
-  messages: Message[],
-  provider: Provider,
-  opts: CompleteOptions = {},
-): Promise<string> {
+export async function runTurn(messages: Message[], provider: Provider, opts: TurnOptions = {}): Promise<string> {
   const system = systemPrompt();
   while (true) {
     const reply = await provider.complete(system, messages, tools.SCHEMAS, opts);
@@ -54,7 +53,7 @@ export async function runTurn(
 
     // one at a time, since a call may stop to ask the user
     const results: ToolResult[] = [];
-    for (const call of reply.toolCalls) results.push(await execute(call));
+    for (const call of reply.toolCalls) results.push(await execute(call, opts.onTool));
     messages.push({ role: "tool", results });
     opts.signal?.throwIfAborted(); // Ctrl+C during a tool: stop before the next model call
   }
@@ -66,9 +65,9 @@ function notice(opts: CompleteOptions, text: string): string {
   return text;
 }
 
-/** Run one tool call and wrap the outcome as a tool result. */
-export async function execute(call: ToolCall): Promise<ToolResult> {
-  console.log(`  > ${call.name} ${JSON.stringify(call.input).slice(0, PREVIEW_CHARS)}`);
+/** Run one tool call and wrap the outcome as a tool result; `onTool` shows what is running. */
+export async function execute(call: ToolCall, onTool: (line: string) => void = console.log): Promise<ToolResult> {
+  onTool(`> ${call.name} ${JSON.stringify(call.input).slice(0, PREVIEW_CHARS)}`);
 
   if (!(await safety.allowed(call.name, call.input))) {
     return { toolCallId: call.id, content: "The user denied this tool call.", isError: true };

@@ -37,7 +37,9 @@ export function editFile(file: string, oldString: string, newString: string, rep
 }
 
 export function writeFile(file: string, content: string): string {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const dir = path.dirname(file);
+  // Bun on Windows throws EEXIST for mkdirSync(".", { recursive: true }), so only create missing dirs
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(file, content, "utf8");
   return `Wrote ${content.length} chars to ${file}`;
 }
