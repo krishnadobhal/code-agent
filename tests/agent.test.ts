@@ -7,6 +7,7 @@ import { createProvider, type Message, type Provider, ProviderError, type Reply 
 import { OpenAIProvider } from "../src/llm/openai.ts";
 import * as jev from "../src/jev.ts";
 import * as safety from "../src/safety.ts";
+import * as tools from "../src/tools/index.ts";
 
 const originalCwd = process.cwd();
 const originalFetch = globalThis.fetch;
@@ -156,4 +157,26 @@ test("openai provider turns API errors into ProviderError", async () => {
   await expect(
     new OpenAIProvider("m", "http://x/v1").complete("sys", [{ role: "user", text: "hi" }], []),
   ).rejects.toBeInstanceOf(ProviderError);
+});
+
+test("edit_file replaces one exact match, keeps CRLF, refuses ambiguity", () => {
+  fs.writeFileSync("a.ts", "const a = 1;\r\nconst b = 1;\r\n");
+  expect(() => tools.run("edit_file", { path: "a.ts", old_string: "= 1", new_string: "= 2" })).toThrow("2 times");
+  expect(() => tools.run("edit_file", { path: "a.ts", old_string: "nope", new_string: "x" })).toThrow("not found");
+  tools.run("edit_file", { path: "a.ts", old_string: "a = 1;\nconst b", new_string: "a = '$&';\nconst b" });
+  expect(fs.readFileSync("a.ts", "utf8")).toBe("const a = '$&';\r\nconst b = 1;\r\n");
+  tools.run("edit_file", { path: "a.ts", old_string: "const", new_string: "let", replace_all: true });
+  expect(fs.readFileSync("a.ts", "utf8")).toBe("let a = '$&';\r\nlet b = 1;\r\n");
+});
+
+test("read_file pages, glob and grep search the project but skip node_modules", async () => {
+  fs.mkdirSync("src/node_modules", { recursive: true });
+  fs.writeFileSync("src/x.ts", "one\ntwo\nfind me\n");
+  fs.writeFileSync("src/node_modules/y.ts", "find me\n");
+  expect(tools.run("read_file", { path: "src/x.ts", offset: 2, limit: 2 })).toBe("two\nfind me");
+  expect(tools.run("glob", { pattern: "**/*.ts" })).toBe("src/x.ts");
+  expect(tools.run("grep", { pattern: "find", include: "**/*.ts" })).toBe("src/x.ts:3: find me");
+  expect(() => tools.run("glob", { pattern: "../**" })).toThrow("..");
+  const never = async () => 0;
+  expect(await safety.allowed("grep", { pattern: "x" }, never)).toBe(true); // read-only, auto-allowed
 });

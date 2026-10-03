@@ -3,7 +3,7 @@
 import path from "node:path";
 import * as jev from "./jev.ts";
 
-const READ_ONLY = new Set(["read_file", "list_dir"]);
+const READ_ONLY = new Set(["read_file", "list_dir", "glob", "grep"]);
 
 // read-only commands skip the prompt; chaining, redirects or --output always ask
 const SAFE_COMMAND = /^(git (status|diff|log|show)|ls|dir|pwd)( [^;&|<>$`\r\n]*)?$/;
@@ -14,6 +14,7 @@ const JEV_MIN_READ_ONLY = 0.99;
 
 export type Judge = (command: string) => Promise<number>;
 
+// Checks that the path stays inside the folder you started the agent in (process.cwd()):
 export function insideCwd(target: string): boolean {
   // doesn't follow symlinks; use fs.realpathSync if links out of the project matter
   const rel = path.relative(process.cwd(), path.resolve(target));
@@ -21,12 +22,9 @@ export function insideCwd(target: string): boolean {
 }
 
 /** Allow project reads and read-only commands; ask for the rest. `judge` (Jev) can only skip a prompt. */
-export async function allowed(
-  name: string,
-  args: Record<string, unknown>,
-  judge: Judge = jev.readOnlyCommand,
-): Promise<boolean> {
+export async function allowed(name: string, args: Record<string, unknown>, judge: Judge = jev.readOnlyCommand): Promise<boolean> {
   const target = typeof args.path === "string" ? args.path : ".";
+  
   if (READ_ONLY.has(name) && insideCwd(target)) return true;
 
   if (name === "run_command" && typeof args.command === "string") {
