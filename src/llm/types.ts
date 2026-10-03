@@ -26,8 +26,11 @@ export type Reply = {
 export interface Provider {
   readonly name: string;
   readonly model: string;
-  complete(system: string, messages: Message[], tools: ToolSchema[]): Promise<Reply>;
+  complete(system: string, messages: Message[], tools: ToolSchema[], opts?: CompleteOptions): Promise<Reply>;
 }
+
+/** `onText` gets reply text as it streams; `signal` cancels the request. */
+export type CompleteOptions = { onText?: (delta: string) => void; signal?: AbortSignal };
 
 /** Thrown for API/network failures; the REPL rolls back the turn on it. */
 export class ProviderError extends Error {}

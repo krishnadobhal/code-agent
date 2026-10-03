@@ -5,6 +5,7 @@
 
 import OpenAI from "openai";
 import {
+  type CompleteOptions,
   type Message,
   type Provider,
   ProviderError,
@@ -28,20 +29,30 @@ export class OpenAIProvider implements Provider {
     this.apiKey = apiKey;
   }
 
-  async complete(system: string, messages: Message[], tools: ToolSchema[]): Promise<Reply> {
+  async complete(
+    system: string,
+    messages: Message[],
+    tools: ToolSchema[],
+    { onText, signal }: CompleteOptions = {},
+  ): Promise<Reply> {
     // The SDK requires a key; local servers (Ollama, LM Studio) ignore it.
     this.client ??= new OpenAI({ apiKey: this.apiKey ?? "not-needed", baseURL: this.baseUrl });
 
     let completion: OpenAI.Chat.ChatCompletion;
     try {
-      completion = await this.client.chat.completions.create({
-        model: this.model,
-        messages: [{ role: "system", content: system }, ...messages.flatMap(toChat)],
-        tools: tools.map((t) => ({
-          type: "function",
-          function: { name: t.name, description: t.description, parameters: t.input_schema },
-        })),
-      });
+      const stream = this.client.chat.completions.stream(
+        {
+          model: this.model,
+          messages: [{ role: "system", content: system }, ...messages.flatMap(toChat)],
+          tools: tools.map((t) => ({
+            type: "function",
+            function: { name: t.name, description: t.description, parameters: t.input_schema },
+          })),
+        },
+        { signal },
+      );
+      if (onText) stream.on("content", (delta) => onText(delta));
+      completion = await stream.finalChatCompletion();
     } catch (error) {
       if (error instanceof OpenAI.APIError) {
         throw new ProviderError(`${this.baseUrl}: ${error.message}`, { cause: error });

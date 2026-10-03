@@ -2,6 +2,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import {
+  type CompleteOptions,
   type Message,
   type Provider,
   ProviderError,
@@ -20,21 +21,31 @@ export class AnthropicProvider implements Provider {
     this.model = model;
   }
 
-  async complete(system: string, messages: Message[], tools: ToolSchema[]): Promise<Reply> {
+  async complete(
+    system: string,
+    messages: Message[],
+    tools: ToolSchema[],
+    { onText, signal }: CompleteOptions = {},
+  ): Promise<Reply> {
     this.client ??= new Anthropic(); // reads ANTHROPIC_API_KEY or an `ant auth login` profile
     try {
-      const response = await this.client.beta.messages.create({
-        model: this.model,
-        max_tokens: 16000,
-        system,
-        messages: messages.map(toParam),
-        tools,
-        thinking: { type: "adaptive" },
-        // On a safety-classifier refusal, the server retries on Anthropic's recommended model.
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
-      });
-      return toReply(response);
+      // streaming avoids request timeouts at this max_tokens
+      const stream = this.client.beta.messages.stream(
+        {
+          model: this.model,
+          max_tokens: 64000,
+          system,
+          messages: messages.map(toParam),
+          tools,
+          thinking: { type: "adaptive" },
+          // On a safety-classifier refusal, the server retries on Anthropic's recommended model.
+          betas: ["server-side-fallback-2026-07-01"],
+          fallbacks: "default",
+        },
+        { signal },
+      );
+      if (onText) stream.on("text", (delta) => onText(delta));
+      return toReply(await stream.finalMessage());
     } catch (error) {
       if (error instanceof Anthropic.APIError) {
         throw new ProviderError(error.message, { cause: error });

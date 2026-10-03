@@ -12,7 +12,11 @@ bun install
 bun start            # needs ANTHROPIC_API_KEY
 ```
 
-Type a request at the `>` prompt; `exit` or Ctrl+C quits.
+Type a request at the `>` prompt. Replies stream as they are written; Ctrl+C cancels the
+current reply (twice, or at an empty prompt, quits); `exit` quits.
+
+Project instructions: put them in `AGENT.md`, `AGENTS.md` or `CLAUDE.md`. Files in the current folder
+and every parent folder are added to the model's instructions each turn.
 
 ## Models
 

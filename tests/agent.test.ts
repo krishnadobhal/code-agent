@@ -2,10 +2,11 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execute, runTurn } from "../src/agent.ts";
+import { execute, runTurn, systemPrompt } from "../src/agent.ts";
 import { createProvider, type Message, type Provider, ProviderError, type Reply } from "../src/llm/index.ts";
 import { OpenAIProvider } from "../src/llm/openai.ts";
 import * as jev from "../src/jev.ts";
+import { loadMemory } from "../src/memory.ts";
 import * as safety from "../src/safety.ts";
 import * as tools from "../src/tools/index.ts";
 
@@ -87,25 +88,39 @@ test("createProvider picks the backend from env", () => {
   expect(() => createProvider({ LLM_PROVIDER: "nope" })).toThrow("Unknown");
 });
 
-test("openai provider maps history and tool calls both ways", async () => {
+/** A Chat Completions server-sent-events body made of the given chunk deltas. */
+function sse(...chunks: object[]): Response {
+  const body = chunks
+    .map((c) => `data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", created: 0, model: "m", ...c })}\n\n`)
+    .join("");
+  return new Response(`${body}data: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+}
+
+test("openai provider streams text and maps history and tool calls both ways", async () => {
   let sent: any;
   globalThis.fetch = (async (_url: string, init: RequestInit) => {
     sent = JSON.parse(String(init.body));
-    return Response.json({
-      choices: [
-        {
-          finish_reason: "tool_calls",
-          message: {
-            content: null,
-            tool_calls: [
-              { id: "c2", type: "function", function: { name: "list_dir", arguments: '{"path":"."}' } },
-            ],
+    return sse(
+      { choices: [{ index: 0, delta: { role: "assistant", content: "Let me " }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { content: "look" }, finish_reason: null }] },
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, id: "c2", type: "function", function: { name: "list_dir", arguments: '{"path":"."}' } },
+              ],
+            },
+            finish_reason: null,
           },
-        },
-      ],
-    });
+        ],
+      },
+      { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+    );
   }) as unknown as typeof fetch;
 
+  const streamed: string[] = [];
   const reply = await new OpenAIProvider("m", "http://x/v1/").complete(
     "sys",
     [
@@ -114,10 +129,12 @@ test("openai provider maps history and tool calls both ways", async () => {
       { role: "tool", results: [{ toolCallId: "c1", content: "boom", isError: true }] },
     ],
     [],
+    { onText: (d) => streamed.push(d) },
   );
 
+  expect(streamed).toEqual(["Let me ", "look"]);
   expect(reply).toEqual({
-    text: "",
+    text: "Let me look",
     stop: "tool_use",
     toolCalls: [{ id: "c2", name: "list_dir", input: { path: "." } }],
   });
@@ -179,4 +196,50 @@ test("read_file pages, glob and grep search the project but skip node_modules", 
   expect(() => tools.run("glob", { pattern: "../**" })).toThrow("..");
   const never = async () => 0;
   expect(await safety.allowed("grep", { pattern: "x" }, never)).toBe(true); // read-only, auto-allowed
+});
+
+test("max_tokens cut keeps the text but drops half-written tool calls", async () => {
+  const provider = fakeProvider([
+    { stop: "max_tokens", text: "partial", toolCalls: [{ id: "t1", name: "read_file", input: {} }] },
+  ]);
+  const messages: Message[] = [{ role: "user", text: "go" }];
+  expect(await runTurn(messages, provider)).toContain("cut off");
+  expect(messages[1]).toEqual({ role: "assistant", text: "partial", toolCalls: [] });
+});
+
+test("an aborted turn stops before the next model call", async () => {
+  fs.writeFileSync("a.txt", "x");
+  const turn = new AbortController();
+  let calls = 0;
+  const provider: Provider = {
+    name: "fake",
+    model: "fake",
+    complete: async () => {
+      calls++;
+      turn.abort(); // Ctrl+C while the model is replying
+      return { stop: "tool_use", text: "", toolCalls: [{ id: "t1", name: "read_file", input: { path: "a.txt" } }] };
+    },
+  };
+  const messages: Message[] = [{ role: "user", text: "go" }];
+  await expect(runTurn(messages, provider, { signal: turn.signal })).rejects.toThrow();
+  expect(calls).toBe(1);
+});
+
+test("memory loads AGENT.md/CLAUDE.md from parents, closest last", () => {
+  fs.mkdirSync("sub");
+  fs.writeFileSync("AGENT.md", "root rule");
+  fs.writeFileSync("sub/CLAUDE.md", "sub rule");
+  const memory = loadMemory(path.join(tmp, "sub"));
+  expect(memory.indexOf("root rule")).toBeGreaterThanOrEqual(0);
+  expect(memory.indexOf("root rule")).toBeLessThan(memory.indexOf("sub rule"));
+  process.chdir("sub");
+  expect(systemPrompt()).toContain("sub rule");
+});
+
+test("memory keeps only the first 100 lines of each file", () => {
+  const lines = Array.from({ length: 150 }, (_, i) => `line ${i + 1}`);
+  fs.writeFileSync("AGENT.md", lines.join("\n"));
+  const memory = loadMemory(tmp);
+  expect(memory).toContain("line 100\n[50 more lines");
+  expect(memory).not.toContain("line 101");
 });
