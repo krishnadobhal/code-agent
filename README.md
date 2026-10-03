@@ -12,7 +12,7 @@ bun install
 bun start            # needs ANTHROPIC_API_KEY
 ```
 
-Type a request at the `>` prompt (`/help` lists commands: `/clear`, `/model` to list and pick a model, `/effort low|medium|high|xhigh|max`, `/exit`). Replies stream as they are written; Ctrl+C cancels the
+Type a request at the `>` prompt (`/help` lists commands: `/clear`, `/model` to list and pick a model, `/effort low|medium|high|xhigh|max`, `/mode`, `/rewind`, `/status`, `/permissions`, `/memory`, `/init`, `/export`, `/exit`). Replies stream as they are written; Ctrl+C cancels the
 current reply (twice, or at an empty prompt, quits); `exit` quits.
 
 Project instructions: put them in `AGENT.md`, `AGENTS.md` or `CLAUDE.md`. Files in the current folder
@@ -34,10 +34,22 @@ Bun loads a `.env` file automatically.
 ## Safety
 
 - Reads and searches inside the project run without asking.
-- Writes, edits and shell commands ask for approval (`y/N`).
+- Writes, edits and shell commands ask for approval (`y/N`, or `a` to always allow it this session).
 - Read-only commands like `git status` or `ls` skip the prompt. Commands with `; & | < > $` always ask.
 - Optional: set `TYPESAFE_API_KEY` to let [Jev](https://typesafe.ai/) auto-approve other commands it is
   very sure only read. Without the key, those commands ask.
+- `/mode accept-edits` auto-approves edits inside the project; `/mode plan` is read-only.
+- Rules in `.code-agent/settings.json` (deny wins, then plan mode, then allow):
+
+  ```json
+  {
+    "mode": "default",
+    "permissions": {
+      "allow": ["run_command(npm test*)", "write_file(src/*)"],
+      "deny": ["run_command(rm *)", "read_file(.env)"]
+    }
+  }
+  ```
 
 ## Development
 

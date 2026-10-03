@@ -1,10 +1,14 @@
-/** Slash commands typed at the REPL prompt (`/help`, `/clear`, ...). They never reach the model. */
+/** Slash commands typed at the REPL prompt (`/help`, `/clear`, ...). Only `prompt` results reach the model. */
 
+import fs from "node:fs";
 import { createProvider, EFFORTS, type Effort, type Message, type Provider } from "./llm/index.ts";
+import { memoryFiles } from "./memory.ts";
+import * as safety from "./safety.ts";
 
 /** What a command can read and change: the REPL's history, model and effort. */
 export type Session = { messages: Message[]; provider: Provider; effort?: Effort };
-export type CommandResult = { text: string; exit?: boolean };
+/** `prompt` is sent to the model as if the user typed it. */
+export type CommandResult = { text: string; exit?: boolean; prompt?: string };
 
 type Command = {
   usage: string;
@@ -51,6 +55,72 @@ const COMMANDS: Record<string, Command> = {
       return { text: `Effort: ${level}` };
     },
   },
+  mode: {
+    usage: "/mode [mode]",
+    description: `Show or set permission mode: ${safety.MODES.join(", ")}`,
+    run: (_session, next) => {
+      if (!next) return { text: `Mode: ${safety.getMode()}` };
+      if (!(safety.MODES as readonly string[]).includes(next)) {
+        return { text: `Unknown mode "${next}". Use one of: ${safety.MODES.join(", ")}` };
+      }
+      safety.setMode(next as safety.Mode);
+      return { text: `Mode: ${next}` };
+    },
+  },
+  rewind: {
+    usage: "/rewind [number]",
+    description: "List your messages, or drop the conversation back to before one (files are not restored)",
+    run: rewind,
+  },
+  status: {
+    usage: "/status",
+    description: "Show model, effort, mode, folder and history size",
+    run: (session) => ({
+      text: [
+        `Model:   ${session.provider.name}: ${session.provider.model}`,
+        `Effort:  ${session.effort ?? "default"}`,
+        `Mode:    ${safety.getMode()}`,
+        `Folder:  ${process.cwd()}`,
+        `History: ${session.messages.length} messages`,
+      ].join("\n"),
+    }),
+  },
+  permissions: {
+    usage: "/permissions",
+    description: "Show allow/deny rules and this session's always-allowed calls",
+    run: () => {
+      const { allow, deny, approved } = safety.rules();
+      const list = (xs: string[]) => (xs.length ? xs.map((x) => `  ${x}`).join("\n") : "  (none)");
+      return { text: `Deny:\n${list(deny)}\nAllow:\n${list(allow)}\nAlways (this session):\n${list(approved)}` };
+    },
+  },
+  memory: {
+    usage: "/memory",
+    description: "List the memory files loaded into the system prompt",
+    run: () => {
+      const files = memoryFiles();
+      return { text: files.length ? files.join("\n") : "No memory files. /init creates AGENT.md." };
+    },
+  },
+  init: {
+    usage: "/init",
+    description: "Have the model study the project and write AGENT.md",
+    run: () => ({
+      text: "Writing AGENT.md...",
+      prompt:
+        "Study this project (layout, build/test commands, conventions) and write a short AGENT.md in the project root " +
+        "with what a new contributor needs to know. If AGENT.md or CLAUDE.md exists, improve it instead.",
+    }),
+  },
+  export: {
+    usage: "/export [file]",
+    description: "Save the conversation as text",
+    run: (session, file) => {
+      const out = file || `conversation-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`;
+      fs.writeFileSync(out, transcript(session.messages));
+      return { text: `Saved to ${out}` };
+    },
+  },
   exit: { usage: "/exit", description: "Quit", run: () => ({ text: "", exit: true }) },
 };
 
@@ -73,6 +143,29 @@ async function model(session: Session, arg: string): Promise<CommandResult> {
   if (!picked) return { text: `No model #${arg}. Type /model to see the list.` };
   session.provider = createProvider({ ...process.env, LLM_MODEL: picked });
   return { text: `Switched to ${session.provider.name}: ${session.provider.model}` };
+}
+
+function rewind(session: Session, arg: string): CommandResult {
+  const turns = session.messages.flatMap((m, i) => (m.role === "user" ? [{ i, text: m.text }] : []));
+  if (!turns.length) return { text: "Nothing to rewind." };
+  if (!arg) {
+    const list = turns.map((t, n) => `  ${String(n + 1).padStart(2)}. ${t.text.slice(0, 80)}`);
+    return { text: `${list.join("\n")}\nType /rewind <number> to go back to before that message.` };
+  }
+  const turn = turns[Number(arg) - 1];
+  if (!/^\d+$/.test(arg) || !turn) return { text: `No message #${arg}. Type /rewind to see the list.` };
+  session.messages.splice(turn.i); // in place: the REPL holds this array
+  return { text: `Rewound to before: ${turn.text.slice(0, 80)}` };
+}
+
+function transcript(messages: Message[]): string {
+  return messages
+    .map((m) => {
+      if (m.role === "user") return `> ${m.text}`;
+      if (m.role === "tool") return m.results.map((r) => `[result${r.isError ? " error" : ""}] ${r.content.slice(0, 500)}`).join("\n");
+      return [m.text, ...m.toolCalls.map((c) => `[${c.name}] ${JSON.stringify(c.input).slice(0, 500)}`)].filter(Boolean).join("\n");
+    })
+    .join("\n\n");
 }
 
 /** Run `line` if it is a slash command; undefined means it is a normal message for the model. */

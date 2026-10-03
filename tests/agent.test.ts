@@ -273,3 +273,69 @@ test("slash commands: help, clear, model list/switch, effort, exit, unknown", as
   expect((await handleCommand("/exit", session))!.exit).toBe(true);
   expect((await handleCommand("/nope", session))!.text).toContain("Unknown command");
 });
+
+test("settings rules, modes and always-allow", async () => {
+  const never = async () => 0;
+  fs.mkdirSync(".code-agent");
+  fs.writeFileSync(
+    ".code-agent/settings.json",
+    JSON.stringify({ permissions: { allow: ["run_command(npm test*)", "write_file(src/*)"], deny: ["run_command(cat *)", "read_file(.env)"] } }),
+  );
+  safety.loadSettings();
+  let asked = 0;
+  safety.setAsk(async () => (asked++, "no"));
+  const run = (command: string) => safety.allowed("run_command", { command }, never);
+
+  expect(await safety.allowed("run_command", { command: "cat README.md" }, async () => 0.999)).toBe(false); // deny beats Jev
+  expect(await run("ls; cat x")).toBe(false); // deny sees chained pieces
+  expect(await safety.allowed("read_file", { path: "./.env" })).toBe(false);
+  expect(await run("npm test --watch")).toBe(true); // allow rule
+  expect(await run("npm test && rm -rf x")).toBe(false); // allow rules skip chains
+  expect(await safety.allowed("write_file", { path: "src/a.ts" })).toBe(true);
+  expect(asked).toBe(1); // only the chained command asked
+
+  safety.setMode("plan");
+  expect(await safety.allowed("write_file", { path: "src/a.ts" })).toBe(false); // plan beats allow
+  expect(await safety.allowed("read_file", { path: "x.txt" })).toBe(true);
+  expect((await execute({ id: "t", name: "edit_file", input: { path: "x" } })).content).toContain("plan mode");
+
+  safety.setMode("accept-edits");
+  expect(await safety.allowed("edit_file", { path: "x.txt" })).toBe(true);
+  expect(await safety.allowed("edit_file", { path: "../x.txt" })).toBe(false); // outside the project still asks
+
+  safety.setMode("default");
+  safety.setAsk(async () => (asked++, "always"));
+  expect(await run("make build")).toBe(true);
+  safety.setAsk(async () => (asked++, "no"));
+  expect(await run("make build")).toBe(true); // remembered, no prompt
+  expect(await run("make clean")).toBe(false); // only that exact command
+  expect(asked).toBe(4); // chain, outside edit, make build once, make clean
+
+  fs.writeFileSync(".code-agent/settings.json", "{bad");
+  expect(() => safety.loadSettings()).toThrow();
+  fs.rmSync(".code-agent", { recursive: true });
+  safety.loadSettings(); // reset for other tests
+});
+
+test("/rewind, /status, /memory, /init and /export", async () => {
+  const session: Session = {
+    provider: fakeProvider([]),
+    messages: [
+      { role: "user", text: "first" },
+      { role: "assistant", text: "one", toolCalls: [] },
+      { role: "user", text: "second" },
+      { role: "assistant", text: "two", toolCalls: [] },
+    ],
+  };
+  expect((await handleCommand("/rewind", session))?.text).toContain("2. second");
+  expect((await handleCommand("/rewind 9", session))?.text).toContain("No message #9");
+  await handleCommand("/rewind 2", session);
+  expect(session.messages).toHaveLength(2); // back to before "second"
+
+  expect((await handleCommand("/status", session))?.text).toContain("History: 2 messages");
+  fs.writeFileSync("AGENT.md", "rules");
+  expect((await handleCommand("/memory", session))?.text).toContain("AGENT.md");
+  expect((await handleCommand("/init", session))?.prompt).toContain("AGENT.md");
+  await handleCommand("/export out.txt", session);
+  expect(fs.readFileSync("out.txt", "utf8")).toBe("> first\n\none");
+});

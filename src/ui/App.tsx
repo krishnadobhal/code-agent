@@ -3,12 +3,12 @@ import { useEffect, useRef, useState } from "react";
 import { runTurn } from "../agent.ts";
 import { handleCommand, type Session } from "../commands.ts";
 import { ProviderError } from "../llm/index.ts";
-import { setAsk } from "../safety.ts";
+import { type Answer, setAsk } from "../safety.ts";
 import { ApprovalBox } from "./ApprovalBox.tsx";
 import { InputBar } from "./InputBar.tsx";
 import { type Item, TranscriptLine } from "./Transcript.tsx";
 
-type Pending = { request: string; resolve: (ok: boolean) => void };
+type Pending = { request: string; resolve: (answer: Answer) => void };
 
 let nextId = 0;
 
@@ -33,23 +33,26 @@ export function App({ session, intro }: { session: Session; intro: string[] }) {
 
   useEffect(() => setAsk((request) => new Promise((resolve) => setPending({ request, resolve }))), []);
 
-  const answer = (ok: boolean) => {
+  const answer = (choice: Answer) => {
     if (!pending) return;
-    add("tool", `${ok ? "allowed" : "denied"}: ${pending.request.slice(0, 120)}`);
-    pending.resolve(ok);
+    const label = { yes: "allowed", no: "denied", always: "always allowed" }[choice];
+    add("tool", `${label}: ${pending.request.slice(0, 120)}`);
+    pending.resolve(choice);
     setPending(undefined);
   };
 
   useInput((ch, key) => {
     if (key.ctrl && ch === "c") {
-      answer(false);
+      answer("no");
       if (turn.current && !turn.current.signal.aborted) turn.current.abort();
       else exit(); // idle, or a second Ctrl+C
       return;
     }
     if (!pending) return;
-    if (ch.toLowerCase() === "y") answer(true);
-    else if (ch.toLowerCase() === "n" || key.return || key.escape) answer(false);
+    const c = ch.toLowerCase();
+    if (c === "y") answer("yes");
+    else if (c === "a") answer("always");
+    else if (c === "n" || key.return || key.escape) answer("no");
   });
 
   const submit = async (value: string) => {
@@ -63,11 +66,11 @@ export function App({ session, intro }: { session: Session; intro: string[] }) {
     if (command) {
       if (command.text) add("info", command.text);
       if (command.exit) exit();
-      return;
+      if (!command.prompt) return;
     }
 
     const start = session.messages.length;
-    session.messages.push({ role: "user", text });
+    session.messages.push({ role: "user", text: command?.prompt ?? text });
     const controller = new AbortController();
     turn.current = controller;
     setBusy(true);

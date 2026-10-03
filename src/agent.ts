@@ -70,7 +70,10 @@ export async function execute(call: ToolCall, onTool: (line: string) => void = c
   onTool(`> ${call.name} ${JSON.stringify(call.input).slice(0, PREVIEW_CHARS)}`);
 
   if (!(await safety.allowed(call.name, call.input))) {
-    return { toolCallId: call.id, content: "The user denied this tool call.", isError: true };
+    const content = safety.getMode() === "plan"
+      ? "Blocked: plan mode is read-only. Explore and propose a plan; the user will switch modes to apply it."
+      : "Denied by the user or a deny rule.";
+    return { toolCallId: call.id, content, isError: true };
   }
 
   try {

@@ -27,11 +27,11 @@ export async function runPlain(session: Session, intro: string[]): Promise<void>
     if (command) {
       if (command.text) console.log(command.text);
       if (command.exit) break;
-      continue;
+      if (!command.prompt) continue;
     }
 
     const start = messages.length;
-    messages.push({ role: "user", text });
+    messages.push({ role: "user", text: command?.prompt ?? text });
     turn = new AbortController();
     try {
       await runTurn(messages, session.provider, {

@@ -5,7 +5,7 @@ export function ApprovalBox({ request }: { request: string }) {
   return (
     <Box borderStyle="round" borderColor="yellow" flexDirection="column" paddingX={1}>
       <Text>{`Allow ${request}?`}</Text>
-      <Text dimColor>y = yes, n or Enter = no</Text>
+      <Text dimColor>y = yes, a = always this session, n or Enter = no</Text>
     </Box>
   );
 }
