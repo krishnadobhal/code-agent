@@ -3,11 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execute, runTurn, systemPrompt } from "../src/agent.ts";
-import { handleCommand, type Session } from "../src/commands.ts";
+import { handleCommand, newSession, type Session } from "../src/commands.ts";
 import { createProvider, type Message, type Provider, ProviderError, type Reply } from "../src/llm/index.ts";
 import { OpenAIProvider } from "../src/llm/openai.ts";
 import * as jev from "../src/jev.ts";
 import { loadMemory } from "../src/memory.ts";
+import { saveSession } from "../src/sessions.ts";
 import * as safety from "../src/safety.ts";
 import * as tools from "../src/tools/index.ts";
 
@@ -18,6 +19,7 @@ let tmp: string;
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "code-agent-"));
   process.chdir(tmp);
+  process.env.CODE_AGENT_HOME = path.join(tmp, "home"); // saved sessions go here
 });
 
 afterEach(() => {
@@ -248,7 +250,7 @@ test("memory keeps only the first 100 lines of each file", () => {
 });
 
 test("slash commands: help, clear, model list/switch, effort, exit, unknown", async () => {
-  const session: Session = { messages: [{ role: "user", text: "hi" }], provider: fakeProvider([]) };
+  const session: Session = { ...newSession(fakeProvider([])), messages: [{ role: "user", text: "hi" }] };
   expect(await handleCommand("hello", session)).toBeUndefined();
   expect((await handleCommand("/help", session))!.text).toContain("/effort");
   expect((await handleCommand("/clear", session))!.text).toContain("cleared");
@@ -319,7 +321,7 @@ test("settings rules, modes and always-allow", async () => {
 
 test("/rewind, /status, /memory, /init and /export", async () => {
   const session: Session = {
-    provider: fakeProvider([]),
+    ...newSession(fakeProvider([])),
     messages: [
       { role: "user", text: "first" },
       { role: "assistant", text: "one", toolCalls: [] },
@@ -338,4 +340,24 @@ test("/rewind, /status, /memory, /init and /export", async () => {
   expect((await handleCommand("/init", session))?.prompt).toContain("AGENT.md");
   await handleCommand("/export out.txt", session);
   expect(fs.readFileSync("out.txt", "utf8")).toBe("> first\n\none");
+});
+
+test("usage adds up, /cost reports it, sessions save and resume", async () => {
+  const usage = { input: 100, output: 20, cacheRead: 900, cacheWrite: 0 };
+  const s = newSession(fakeProvider([
+    { stop: "tool_use", text: "", toolCalls: [{ id: "t1", name: "list_dir", input: {} }], usage },
+    { stop: "end", text: "done", toolCalls: [], usage },
+  ]));
+  s.messages.push({ role: "user", text: "look around" });
+  await runTurn(s.messages, s.provider, { usage: s.usage });
+  expect(s.usage).toEqual({ input: 200, output: 40, cacheRead: 1800, cacheWrite: 0 });
+  expect((await handleCommand("/cost", s))?.text).toContain("Cache hit rate: 90%");
+
+  saveSession(s.id, s.messages);
+  const next = newSession(s.provider);
+  expect((await handleCommand("/resume", next))?.text).toContain("1. ");
+  await handleCommand("/resume 1", next);
+  expect(next.messages).toEqual(JSON.parse(JSON.stringify(s.messages)));
+  expect(next.id).toBe(s.id); // keeps writing the same file
+  expect((await handleCommand("/resume ../x", next))?.text).toContain("No session");
 });

@@ -38,6 +38,7 @@ export class AnthropicProvider implements Provider {
           messages: messages.map(toParam),
           tools,
           thinking: { type: "adaptive" },
+          cache_control: { type: "ephemeral" }, // caches the prefix up to the last block; each call reads the previous one's
           ...(effort ? { output_config: { effort } } : {}),
           // On a safety-classifier refusal, the server retries on Anthropic's recommended model.
           betas: ["server-side-fallback-2026-07-01"],
@@ -113,5 +114,11 @@ function toReply(response: Anthropic.Beta.BetaMessage): Reply {
     stop:
       reason === "tool_use" || reason === "max_tokens" || reason === "refusal" ? reason : "end",
     raw: response.content,
+    usage: {
+      input: response.usage.input_tokens,
+      output: response.usage.output_tokens,
+      cacheRead: response.usage.cache_read_input_tokens ?? 0,
+      cacheWrite: response.usage.cache_creation_input_tokens ?? 0,
+    },
   };
 }

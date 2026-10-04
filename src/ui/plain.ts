@@ -1,8 +1,9 @@
 /** Plain line-by-line REPL, used when stdin/stdout is not a terminal (pipes, scripts). */
 
 import { runTurn } from "../agent.ts";
-import { handleCommand, type Session } from "../commands.ts";
-import { ProviderError } from "../llm/index.ts";
+import { formatUsage, handleCommand, type Session } from "../commands.ts";
+import { addUsage, emptyUsage, ProviderError } from "../llm/index.ts";
+import { saveSession } from "../sessions.ts";
 
 /** Read lines with prompt() until EOF or exit; same commands and turn handling as the Ink UI. */
 export async function runPlain(session: Session, intro: string[]): Promise<void> {
@@ -27,25 +28,30 @@ export async function runPlain(session: Session, intro: string[]): Promise<void>
     if (command) {
       if (command.text) console.log(command.text);
       if (command.exit) break;
+      saveSession(session.id, messages); // /rewind and /resume change history too
       if (!command.prompt) continue;
     }
 
     const start = messages.length;
     messages.push({ role: "user", text: command?.prompt ?? text });
     turn = new AbortController();
+    const used = emptyUsage();
     try {
       await runTurn(messages, session.provider, {
         onText: (delta) => process.stdout.write(delta),
         signal: turn.signal,
         effort: session.effort,
+        usage: used,
       });
-      process.stdout.write("\n");
+      process.stdout.write(`\n(${formatUsage(used)})\n`);
     } catch (error) {
       if (!turn.signal.aborted && !(error instanceof ProviderError)) throw error;
       messages.splice(start); // roll back the half-finished turn so history stays valid
       console.log(turn.signal.aborted ? "\n[cancelled]" : `\n[turn aborted] ${(error as Error).message}`);
     } finally {
       turn = undefined;
+      addUsage(session.usage, used); // cancelled turns still cost tokens
+      saveSession(session.id, messages);
     }
   }
 }

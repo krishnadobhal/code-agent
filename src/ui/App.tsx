@@ -1,9 +1,10 @@
 import { Static, Text, useApp, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
 import { runTurn } from "../agent.ts";
-import { handleCommand, type Session } from "../commands.ts";
-import { ProviderError } from "../llm/index.ts";
+import { formatUsage, handleCommand, type Session } from "../commands.ts";
+import { addUsage, emptyUsage, ProviderError } from "../llm/index.ts";
 import { type Answer, setAsk } from "../safety.ts";
+import { saveSession } from "../sessions.ts";
 import { ApprovalBox } from "./ApprovalBox.tsx";
 import { InputBar } from "./InputBar.tsx";
 import { type Item, TranscriptLine } from "./Transcript.tsx";
@@ -66,18 +67,21 @@ export function App({ session, intro }: { session: Session; intro: string[] }) {
     if (command) {
       if (command.text) add("info", command.text);
       if (command.exit) exit();
+      saveSession(session.id, session.messages); // /rewind and /resume change history too
       if (!command.prompt) return;
     }
 
     const start = session.messages.length;
     session.messages.push({ role: "user", text: command?.prompt ?? text });
     const controller = new AbortController();
+    const used = emptyUsage();
     turn.current = controller;
     setBusy(true);
     try {
       await runTurn(session.messages, session.provider, {
         signal: controller.signal,
         effort: session.effort,
+        usage: used,
         onText: (delta) => {
           liveRef.current += delta;
           setLive(liveRef.current);
@@ -88,6 +92,7 @@ export function App({ session, intro }: { session: Session; intro: string[] }) {
         },
       });
       flushLive();
+      add("info", formatUsage(used));
     } catch (error) {
       flushLive();
       session.messages.splice(start); // roll back the half-finished turn so history stays valid
@@ -96,6 +101,8 @@ export function App({ session, intro }: { session: Session; intro: string[] }) {
       else add("error", `[bug] ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     } finally {
       turn.current = undefined;
+      addUsage(session.usage, used); // cancelled turns still cost tokens
+      saveSession(session.id, session.messages);
       setBusy(false);
     }
   };

@@ -20,7 +20,20 @@ export type Reply = {
   toolCalls: ToolCall[];
   stop: "end" | "tool_use" | "max_tokens" | "refusal";
   raw?: unknown;
+  usage?: Usage;
 };
+
+/** Tokens for one call, or a running total. `input` excludes cached tokens. */
+export type Usage = { input: number; output: number; cacheRead: number; cacheWrite: number };
+
+export const emptyUsage = (): Usage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+
+export function addUsage(total: Usage, u: Usage): void {
+  total.input += u.input;
+  total.output += u.output;
+  total.cacheRead += u.cacheRead;
+  total.cacheWrite += u.cacheWrite;
+}
 
 /** One LLM backend. Add a backend = add a class implementing this + a case in `createProvider`. */
 export interface Provider {

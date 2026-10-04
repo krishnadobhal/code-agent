@@ -1,12 +1,21 @@
 /** Slash commands typed at the REPL prompt (`/help`, `/clear`, ...). Only `prompt` results reach the model. */
 
 import fs from "node:fs";
-import { createProvider, EFFORTS, type Effort, type Message, type Provider } from "./llm/index.ts";
+import { createProvider, EFFORTS, type Effort, emptyUsage, type Message, type Provider, type Usage } from "./llm/index.ts";
 import { memoryFiles } from "./memory.ts";
 import * as safety from "./safety.ts";
+import { listSessions, loadSession, newId } from "./sessions.ts";
 
-/** What a command can read and change: the REPL's history, model and effort. */
-export type Session = { messages: Message[]; provider: Provider; effort?: Effort };
+/** What a command can read and change: the REPL's history, model, effort, saved-session id and token total. */
+export type Session = { id: string; messages: Message[]; provider: Provider; effort?: Effort; usage: Usage };
+
+export const newSession = (provider: Provider): Session => ({ id: newId(), messages: [], provider, usage: emptyUsage() });
+
+/** One line like "12,340 in (10,000 cached, 300 written) · 512 out". */
+export function formatUsage(u: Usage): string {
+  const n = (x: number) => x.toLocaleString("en-US");
+  return `${n(u.input + u.cacheRead + u.cacheWrite)} in (${n(u.cacheRead)} cached, ${n(u.cacheWrite)} written) · ${n(u.output)} out`;
+}
 /** `prompt` is sent to the model as if the user typed it. */
 export type CommandResult = { text: string; exit?: boolean; prompt?: string };
 
@@ -31,8 +40,23 @@ const COMMANDS: Record<string, Command> = {
     description: "Forget the conversation and start fresh",
     run: (session) => {
       session.messages.length = 0; // in place: the REPL holds this array
+      session.id = newId(); // the old conversation stays saved for /resume
       return { text: "Conversation cleared." };
     },
+  },
+  cost: {
+    usage: "/cost",
+    description: "Tokens used since the agent started, and the cache hit rate",
+    run: ({ usage: u }) => {
+      const prompt = u.input + u.cacheRead + u.cacheWrite;
+      const hit = prompt ? Math.round((100 * u.cacheRead) / prompt) : 0;
+      return { text: `${formatUsage(u)}\nCache hit rate: ${hit}% of input tokens` };
+    },
+  },
+  resume: {
+    usage: "/resume [number|id]",
+    description: "List saved conversations for this folder, or load one",
+    run: resume,
   },
   model: {
     usage: "/model [number|id]",
@@ -156,6 +180,27 @@ function rewind(session: Session, arg: string): CommandResult {
   if (!/^\d+$/.test(arg) || !turn) return { text: `No message #${arg}. Type /rewind to see the list.` };
   session.messages.splice(turn.i); // in place: the REPL holds this array
   return { text: `Rewound to before: ${turn.text.slice(0, 80)}` };
+}
+
+function resume(session: Session, arg: string): CommandResult {
+  const saved = listSessions();
+  if (!arg) {
+    if (!saved.length) return { text: "No saved conversations for this folder." };
+    const list = saved
+      .slice(0, 20)
+      .map((s, n) => `  ${String(n + 1).padStart(2)}. ${s.when.toLocaleString()}  ${s.first.slice(0, 60)}`);
+    return { text: `${list.join("\n")}\nType /resume <number> to load one.` };
+  }
+  const id = /^\d+$/.test(arg) ? saved[Number(arg) - 1]?.id : arg;
+  if (!id) return { text: `No conversation #${arg}. Type /resume to see the list.` };
+  try {
+    session.messages.splice(0, Infinity, ...loadSession(id)); // in place: the REPL holds this array
+  } catch (error) {
+    return { text: (error as Error).message };
+  }
+  session.id = id; // keep saving into the same file
+  const last = session.messages.findLast((m) => m.role === "assistant");
+  return { text: `Resumed ${id} (${session.messages.length} messages).${last?.role === "assistant" && last.text ? `\nLast reply: ${last.text.slice(0, 200)}` : ""}` };
 }
 
 function transcript(messages: Message[]): string {

@@ -1,14 +1,14 @@
 /** Agent loop: call the model, run the tools it asks for, repeat until it answers. */
 
-import type { CompleteOptions, Message, Provider, ToolCall, ToolResult } from "./llm/index.ts";
+import { addUsage, type CompleteOptions, type Message, type Provider, type ToolCall, type ToolResult, type Usage } from "./llm/index.ts";
 import { loadMemory } from "./memory.ts";
 import * as safety from "./safety.ts";
 import * as tools from "./tools/index.ts";
 
 const PREVIEW_CHARS = 120; // how much of a tool's input to echo to the terminal
 
-/** Model options plus `onTool`, which receives a line for each tool call as it starts. */
-export type TurnOptions = CompleteOptions & { onTool?: (line: string) => void };
+/** Model options plus `onTool` (a line per tool call) and `usage` (a running total, added to in place). */
+export type TurnOptions = CompleteOptions & { onTool?: (line: string) => void; usage?: Usage };
 
 /** Base instructions plus the project's memory files, re-read each turn. */
 export function systemPrompt(): string {
@@ -35,6 +35,7 @@ export async function runTurn(messages: Message[], provider: Provider, opts: Tur
   const system = systemPrompt();
   while (true) {
     const reply = await provider.complete(system, messages, tools.SCHEMAS, opts);
+    if (reply.usage && opts.usage) addUsage(opts.usage, reply.usage);
 
     if (reply.stop === "refusal") {
       messages.push({ role: "assistant", text: "(declined)", toolCalls: [] });

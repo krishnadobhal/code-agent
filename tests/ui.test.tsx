@@ -3,7 +3,7 @@ import { render } from "ink-testing-library";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Session } from "../src/commands.ts";
+import { newSession, type Session } from "../src/commands.ts";
 import type { Provider, Reply } from "../src/llm/index.ts";
 import { App } from "../src/ui/index.tsx";
 
@@ -13,6 +13,7 @@ let tmp: string;
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "code-agent-ui-"));
   process.chdir(tmp);
+  process.env.CODE_AGENT_HOME = path.join(tmp, "home");
 });
 
 afterEach(() => {
@@ -33,7 +34,7 @@ function session(replies: Reply[]): Session {
     },
     listModels: async () => [],
   };
-  return { messages: [], provider };
+  return newSession(provider);
 }
 
 test("ui runs slash commands", async () => {

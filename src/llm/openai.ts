@@ -49,6 +49,7 @@ export class OpenAIProvider implements Provider {
             function: { name: t.name, description: t.description, parameters: t.input_schema },
           })),
           ...(effort ? { reasoning_effort: effort } : {}),
+          stream_options: { include_usage: true }, // usage arrives in the last chunk
         },
         { signal },
       );
@@ -73,7 +74,11 @@ export class OpenAIProvider implements Provider {
     else if (toolCalls.length) stop = "tool_use"; // some servers say "stop" even with tool calls
     else if (choice.finish_reason === "length") stop = "max_tokens";
 
-    return { text: msg.content ?? msg.refusal ?? "", toolCalls, stop };
+    // OpenAI caches long prefixes on its own; prompt_tokens includes the cached part
+    const u = completion.usage;
+    const cached = u?.prompt_tokens_details?.cached_tokens ?? 0;
+    const usage = u && { input: u.prompt_tokens - cached, output: u.completion_tokens, cacheRead: cached, cacheWrite: 0 };
+    return { text: msg.content ?? msg.refusal ?? "", toolCalls, stop, usage };
   }
 
   async listModels(): Promise<string[]> {

@@ -10,10 +10,12 @@ Built with TypeScript on [Bun](https://bun.sh), with a React + [Ink](https://git
 ```sh
 bun install
 bun start            # needs ANTHROPIC_API_KEY
+bun start --continue # pick up the last conversation in this folder (--resume [id] to choose)
 ```
 
-Type a request at the `>` prompt (`/help` lists commands: `/clear`, `/model` to list and pick a model, `/effort low|medium|high|xhigh|max`, `/mode`, `/rewind`, `/status`, `/permissions`, `/memory`, `/init`, `/export`, `/exit`). Replies stream as they are written; Ctrl+C cancels the
-current reply (twice, or at an empty prompt, quits); `exit` quits.
+Type a request at the `>` prompt (`/help` lists commands: `/clear`, `/model` to list and pick a model, `/effort low|medium|high|xhigh|max`, `/mode`, `/cost`, `/resume`, `/rewind`, `/status`, `/permissions`, `/memory`, `/init`, `/export`, `/exit`). Replies stream as they are written; Ctrl+C cancels the
+current reply (twice, or at an empty prompt, quits); `exit` quits. Each turn ends with a token line;
+conversations are saved under `~/.code-agent/projects/` (set `CODE_AGENT_HOME` to move it).
 
 Project instructions: put them in `AGENT.md`, `AGENTS.md` or `CLAUDE.md`. Files in the current folder
 and every parent folder are added to the model's instructions each turn.
