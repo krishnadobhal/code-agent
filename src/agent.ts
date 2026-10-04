@@ -1,6 +1,7 @@
 /** Agent loop: call the model, run the tools it asks for, repeat until it answers. */
 
 import { addUsage, type CompleteOptions, type Message, type Provider, type ToolCall, type ToolResult, type Usage } from "./llm/index.ts";
+import { compact, microcompact, needsCompact } from "./compact.ts";
 import { loadMemory } from "./memory.ts";
 import * as safety from "./safety.ts";
 import * as tools from "./tools/index.ts";
@@ -34,21 +35,27 @@ How to work:
 export async function runTurn(messages: Message[], provider: Provider, opts: TurnOptions = {}): Promise<string> {
   const system = systemPrompt();
   while (true) {
+    const cleared = microcompact(messages);
+    if (cleared) opts.onTool?.(`[cleared ${cleared} old tool results: the prompt cache had expired]`);
+
+    const at = Date.now();
     const reply = await provider.complete(system, messages, tools.SCHEMAS, opts);
     if (reply.usage && opts.usage) addUsage(opts.usage, reply.usage);
+    const u = reply.usage;
+    const stamp = { at, ...(u ? { promptTokens: u.input + u.cacheRead + u.cacheWrite } : {}) };
 
     if (reply.stop === "refusal") {
-      messages.push({ role: "assistant", text: "(declined)", toolCalls: [] });
+      messages.push({ role: "assistant", text: "(declined)", toolCalls: [], ...stamp });
       return notice(opts, "[The model declined this request]");
     }
 
     if (reply.stop === "max_tokens") {
       // keep only the text: a half-written tool call would leave a tool_use with no result
-      messages.push({ role: "assistant", text: reply.text, toolCalls: [] });
+      messages.push({ role: "assistant", text: reply.text, toolCalls: [], ...stamp });
       return reply.text + notice(opts, "\n[reply cut off at max_tokens]");
     }
 
-    messages.push({ role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw });
+    messages.push({ role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw, ...stamp });
     if (reply.stop !== "tool_use") return reply.text;
     if (reply.text) opts.onText?.("\n"); // end the streamed line before tool logs
 
@@ -58,6 +65,13 @@ export async function runTurn(messages: Message[], provider: Provider, opts: Tur
     messages.push({ role: "tool", results });
     opts.signal?.throwIfAborted(); // Ctrl+C during a tool: stop before the next model call
   }
+}
+
+/** Summarize the history first if the last prompt was near the context limit; true if it did. */
+export async function compactIfFull(messages: Message[], provider: Provider, opts: TurnOptions = {}): Promise<boolean> {
+  if (!needsCompact(messages)) return false;
+  await compact(messages, provider, systemPrompt(), opts);
+  return true;
 }
 
 /** Streams a status line like reply text, so the REPL only prints what streamed. */

@@ -12,7 +12,8 @@ export type ToolResult = { toolCallId: string; content: string; isError: boolean
 export type Message =
   | { role: "user"; text: string }
   // `raw` is the provider's own reply content, sent back unchanged (Anthropic needs its thinking blocks).
-  | { role: "assistant"; text: string; toolCalls: ToolCall[]; raw?: unknown }
+  // `at` is when the call started (cache age); `promptTokens` how big its prompt was (when to compact)
+  | { role: "assistant"; text: string; toolCalls: ToolCall[]; raw?: unknown; at?: number; promptTokens?: number }
   | { role: "tool"; results: ToolResult[] };
 
 export type Reply = {

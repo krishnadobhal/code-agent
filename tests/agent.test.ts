@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execute, runTurn, systemPrompt } from "../src/agent.ts";
+import { compactIfFull, execute, runTurn, systemPrompt } from "../src/agent.ts";
+import { CLEARED, microcompact } from "../src/compact.ts";
 import { handleCommand, newSession, type Session } from "../src/commands.ts";
 import { createProvider, type Message, type Provider, ProviderError, type Reply } from "../src/llm/index.ts";
 import { OpenAIProvider } from "../src/llm/openai.ts";
@@ -208,7 +209,7 @@ test("max_tokens cut keeps the text but drops half-written tool calls", async ()
   ]);
   const messages: Message[] = [{ role: "user", text: "go" }];
   expect(await runTurn(messages, provider)).toContain("cut off");
-  expect(messages[1]).toEqual({ role: "assistant", text: "partial", toolCalls: [] });
+  expect(messages[1]).toMatchObject({ role: "assistant", text: "partial", toolCalls: [] });
 });
 
 test("an aborted turn stops before the next model call", async () => {
@@ -360,4 +361,46 @@ test("usage adds up, /cost reports it, sessions save and resume", async () => {
   expect(next.messages).toEqual(JSON.parse(JSON.stringify(s.messages)));
   expect(next.id).toBe(s.id); // keeps writing the same file
   expect((await handleCommand("/resume ../x", next))?.text).toContain("No session");
+});
+
+test("microcompact clears old big tool results only once the cache is cold", () => {
+  const messages: Message[] = [{ role: "user", text: "go" }];
+  for (let i = 0; i < 8; i++) {
+    const name = i === 0 ? "edit_file" : "read_file"; // edit results are never cleared
+    messages.push({ role: "assistant", text: "", toolCalls: [{ id: `t${i}`, name, input: {} }], at: 0 });
+    messages.push({ role: "tool", results: [{ toolCallId: `t${i}`, content: `out ${i}`, isError: false }] });
+  }
+  const contents = () => messages.flatMap((m) => (m.role === "tool" ? m.results.map((r) => r.content) : []));
+
+  expect(microcompact(messages, 60_000)).toBe(0); // 1 minute after the last call: cache warm, leave it
+  expect(microcompact(messages, 10 * 60_000)).toBe(2); // 10 minutes: cold, clear all but the last 5 reads
+  expect(contents()).toEqual(["out 0", CLEARED, CLEARED, "out 3", "out 4", "out 5", "out 6", "out 7"]);
+  expect(microcompact(messages, 10 * 60_000)).toBe(0); // already cleared ones don't count again
+});
+
+test("compaction summarizes the history when the last prompt was too big, and /compact does it on demand", async () => {
+  const sent: Message[][] = [];
+  const provider: Provider = {
+    name: "fake",
+    model: "fake",
+    complete: async (_s, messages) => {
+      sent.push(messages);
+      return { stop: "end", text: "User wants X. Changed a.ts.", toolCalls: [] };
+    },
+    listModels: async () => [],
+  };
+  const messages: Message[] = [
+    { role: "user", text: "do X" },
+    { role: "assistant", text: "ok", toolCalls: [], at: Date.now(), promptTokens: 1000 },
+  ];
+  expect(await compactIfFull(messages, provider)).toBe(false); // small prompt: leave it
+
+  (messages[1] as Extract<Message, { role: "assistant" }>).promptTokens = 250_000;
+  expect(await compactIfFull(messages, provider)).toBe(true);
+  expect(sent[0]?.at(-1)).toMatchObject({ role: "user", text: expect.stringContaining("Summarize") });
+  expect(messages).toHaveLength(2);
+  expect(messages[0]).toMatchObject({ role: "user", text: expect.stringContaining("User wants X. Changed a.ts.") });
+
+  const session = { ...newSession(provider), messages };
+  expect((await handleCommand("/compact", session))?.text).toContain("Compacted 2 messages");
 });

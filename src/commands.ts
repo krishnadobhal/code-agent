@@ -1,7 +1,9 @@
 /** Slash commands typed at the REPL prompt (`/help`, `/clear`, ...). Only `prompt` results reach the model. */
 
 import fs from "node:fs";
-import { createProvider, EFFORTS, type Effort, emptyUsage, type Message, type Provider, type Usage } from "./llm/index.ts";
+import { systemPrompt } from "./agent.ts";
+import { compact } from "./compact.ts";
+import { createProvider, EFFORTS, type Effort, emptyUsage, type Message, type Provider, ProviderError, type Usage } from "./llm/index.ts";
 import { memoryFiles } from "./memory.ts";
 import * as safety from "./safety.ts";
 import { listSessions, loadSession, newId } from "./sessions.ts";
@@ -51,6 +53,22 @@ const COMMANDS: Record<string, Command> = {
       const prompt = u.input + u.cacheRead + u.cacheWrite;
       const hit = prompt ? Math.round((100 * u.cacheRead) / prompt) : 0;
       return { text: `${formatUsage(u)}\nCache hit rate: ${hit}% of input tokens` };
+    },
+  },
+  compact: {
+    usage: "/compact",
+    description: "Replace the conversation with a summary to free up context",
+    run: async (session) => {
+      if (!session.messages.length) return { text: "Nothing to compact." };
+      const before = session.messages.length;
+      try {
+        await compact(session.messages, session.provider, systemPrompt(), { effort: session.effort, usage: session.usage });
+      } catch (error) {
+        if (!(error instanceof ProviderError)) throw error;
+        return { text: `[compact failed] ${error.message}` };
+      }
+      const summary = session.messages[0]?.role === "user" ? session.messages[0].text : "";
+      return { text: `Compacted ${before} messages into a summary:\n${summary.slice(summary.indexOf("\n\n") + 2)}` };
     },
   },
   resume: {

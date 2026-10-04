@@ -1,6 +1,6 @@
 import { Static, Text, useApp, useInput } from "ink";
 import { useEffect, useRef, useState } from "react";
-import { runTurn } from "../agent.ts";
+import { compactIfFull, runTurn } from "../agent.ts";
 import { formatUsage, handleCommand, type Session } from "../commands.ts";
 import { addUsage, emptyUsage, ProviderError } from "../llm/index.ts";
 import { type Answer, setAsk } from "../safety.ts";
@@ -71,13 +71,16 @@ export function App({ session, intro }: { session: Session; intro: string[] }) {
       if (!command.prompt) return;
     }
 
-    const start = session.messages.length;
-    session.messages.push({ role: "user", text: command?.prompt ?? text });
+    let start = session.messages.length;
     const controller = new AbortController();
     const used = emptyUsage();
     turn.current = controller;
     setBusy(true);
     try {
+      const opts = { signal: controller.signal, effort: session.effort, usage: used };
+      if (await compactIfFull(session.messages, session.provider, opts)) add("info", "[conversation summarized to stay inside the context window]");
+      start = session.messages.length; // after compaction, so a failed turn rolls back to here
+      session.messages.push({ role: "user", text: command?.prompt ?? text });
       await runTurn(session.messages, session.provider, {
         signal: controller.signal,
         effort: session.effort,

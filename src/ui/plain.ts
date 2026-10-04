@@ -1,6 +1,6 @@
 /** Plain line-by-line REPL, used when stdin/stdout is not a terminal (pipes, scripts). */
 
-import { runTurn } from "../agent.ts";
+import { compactIfFull, runTurn } from "../agent.ts";
 import { formatUsage, handleCommand, type Session } from "../commands.ts";
 import { addUsage, emptyUsage, ProviderError } from "../llm/index.ts";
 import { saveSession } from "../sessions.ts";
@@ -32,11 +32,15 @@ export async function runPlain(session: Session, intro: string[]): Promise<void>
       if (!command.prompt) continue;
     }
 
-    const start = messages.length;
-    messages.push({ role: "user", text: command?.prompt ?? text });
+    let start = messages.length;
     turn = new AbortController();
     const used = emptyUsage();
     try {
+      if (await compactIfFull(messages, session.provider, { signal: turn.signal, effort: session.effort, usage: used })) {
+        console.log("[conversation summarized to stay inside the context window]");
+      }
+      start = messages.length; // after compaction, so a failed turn rolls back to here
+      messages.push({ role: "user", text: command?.prompt ?? text });
       await runTurn(messages, session.provider, {
         onText: (delta) => process.stdout.write(delta),
         signal: turn.signal,
